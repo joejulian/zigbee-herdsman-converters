@@ -47,13 +47,11 @@ import {
     configureSetPowerSourceWhenUnknown,
     determineEndpoint,
     exposeEndpoints,
-    filterObject,
     flatten,
     getEndpointName,
     getEndpointsWithCluster,
     getFromLookup,
     getFromLookupByValue,
-    getKey,
     getOptions,
     hasAlreadyProcessedMessage,
     isEndpoint,
@@ -64,7 +62,6 @@ import {
     precisionRound,
     splitArrayIntoChunks,
     toNumber,
-    validateValue,
 } from "./utils";
 
 const NS = "zhc:modernextend";
@@ -598,6 +595,8 @@ export function identify(args: IdentifyArgs = {}): ModernExtend {
 }
 
 export interface OnOffArgs {
+    /** Combine power across all named endpoints while preserving legacy and endpoint properties. */
+    combinedOnOff?: boolean;
     powerOnBehavior?: boolean;
     ota?: ModernExtend["ota"];
     skipDuplicateTransaction?: boolean;
@@ -631,6 +630,7 @@ export function onOff(args: OnOffArgs = {}): ModernExtend {
     }
 
     const result: ModernExtend = {exposes, fromZigbee, toZigbee, isModernExtend: true};
+    if (args.combinedOnOff) result.meta = {combinedOnOff: true};
     if (ota) result.ota = ota;
     if (configureReporting) {
         result.configure = [
@@ -1286,123 +1286,9 @@ export function pm25(args: Partial<NumericArgs<"pm25Measurement">> = {}): Modern
 
 // #region Lighting
 
-/**
- * Adds whole-device power controls for all named endpoints in the definition's endpoint mapping.
- * Wrap a light or onOff extension; existing exposes and legacy properties are preserved.
- * State is ON if any channel is ON, OFF only when every channel is known OFF.
- */
-export function withCombinedOnOff(extend: ModernExtend): ModernExtend {
-    // Multiple endpoint commands in one MQTT message share the same state snapshot.
-    const pendingStates = new WeakMap<KeyValue, KeyValue>();
-    const combinedState = (state: KeyValue, endpoints: Record<string, number>): KeyValue => {
-        const states = Object.keys(endpoints).map((name) => state[`state_${name}`]);
-        return states.includes("ON") ? {state: "ON"} : states.length && states.every((value) => value === "OFF") ? {state: "OFF"} : {};
-    };
-    return {
-        ...extend,
-        fromZigbee: extend.fromZigbee?.map((converter) => ({
-            ...converter,
-            convert: async (model, msg, publish, options, meta) => {
-                const legacy = await converter.convert(model, msg, publish, options, meta);
-                if (!legacy) return legacy;
-                const endpoints = model.endpoint(meta.device);
-                // Keep legacy properties while using each endpoint's own cached state for color synchronization.
-                const channel =
-                    !model.meta?.multiEndpoint && getKey(endpoints, msg.endpoint.ID)
-                        ? await converter.convert({...model, meta: {...model.meta, multiEndpoint: true}}, msg, publish, options, meta)
-                        : undefined;
-                const payload = {...channel, ...legacy};
-                if ("state" in payload || Object.keys(endpoints).some((name) => `state_${name}` in payload)) {
-                    delete payload.state;
-                    Object.assign(payload, combinedState({...meta.state, ...payload}, endpoints));
-                }
-                return payload;
-            },
-        })),
-        toZigbee: extend.toZigbee?.map((converter) => ({
-            ...converter,
-            ...(converter.convertSet && {
-                convertSet: async (entity, key, value, meta) => {
-                    if (!isEndpoint(entity) || Array.isArray(meta.mapped)) return converter.convertSet(entity, key, value, meta);
-                    const endpoints = meta.mapped.endpoint(meta.device);
-                    const endpointName = getKey(endpoints, entity.ID);
-                    if (!endpointName) return converter.convertSet(entity, key, value, meta);
-                    const all = !meta.endpoint_name && converter.key.includes("state") && typeof meta.message.state === "string";
-                    const state = {...(pendingStates.get(meta.state) ?? meta.state)};
-                    let command = all ? getFromLookup(meta.message.state, {on: "ON", off: "OFF", toggle: "TOGGLE"}) : undefined;
-                    if (command === "TOGGLE") {
-                        for (const [name, ID] of Object.entries(endpoints)) {
-                            const {onOff} = await meta.device.getEndpoint(ID).read("genOnOff", ["onOff"]);
-                            validateValue(onOff, [0, 1]);
-                            state[`state_${name}`] = onOff ? "ON" : "OFF";
-                        }
-                        pendingStates.set(meta.state, state);
-                        command = combinedState(state, endpoints).state === "ON" ? "OFF" : "ON";
-                    }
-                    const filtered = (property: string) =>
-                        Array.isArray(meta.options.filtered_optimistic) &&
-                        meta.options.filtered_optimistic.some((pattern) => new RegExp(pattern).test(property));
-                    // Fully qualified state avoids the caller suffixing the combined state as a channel property.
-                    const result: Tz.ConvertSetResult = {state: {}, membersState: {}};
-                    const payload: KeyValue = {};
-                    const timing = filterObject(meta.message, ["transition", "on_time", "off_wait_time"]);
-                    const errors: unknown[] = [];
-                    for (const [name, ID] of Object.entries(all ? endpoints : {[endpointName]: entity.ID})) {
-                        const message = all ? {...(name === endpointName ? meta.message : timing), state: command} : meta.message;
-                        const channelKey = all && name !== endpointName ? "state" : key;
-                        try {
-                            const converted = await converter.convertSet(meta.device.getEndpoint(ID), channelKey, all ? message[channelKey] : value, {
-                                ...meta,
-                                endpoint_name: all ? name : meta.endpoint_name,
-                                message,
-                                state: {...state, state: state[`state_${name}`], brightness: state[`brightness_${name}`] ?? state.brightness},
-                            });
-                            if (!converted) {
-                                if (!all) return;
-                                continue;
-                            }
-                            const updateState =
-                                converted.state?.state &&
-                                meta.options.optimistic !== false &&
-                                !filtered(all || meta.endpoint_name ? `state_${name}` : "state");
-                            if (!all && !updateState) return converted;
-                            const {state: channelState, ...otherState} = converted.state ?? {};
-                            if (name === endpointName) result.state = otherState;
-                            Object.assign(result.membersState, converted.membersState);
-                            for (const [property, value] of Object.entries(all ? (converted.state ?? {}) : {state: channelState}))
-                                payload[`${property}_${name}`] = value;
-                            Object.assign(payload, converted.membersState?.[meta.device.ieeeAddr]);
-                            if (updateState) {
-                                state[`state_${name}`] = channelState;
-                                Object.assign(payload, combinedState(state, endpoints));
-                                pendingStates.set(meta.state, state);
-                            }
-                        } catch (error) {
-                            errors.push(error);
-                        }
-                    }
-                    for (const property of Object.keys(payload)) if (filtered(property)) delete payload[property];
-                    if (errors.length) {
-                        const partial = {...Object.fromEntries(Object.entries(result.state).filter(([property]) => !filtered(property))), ...payload};
-                        if (meta.options.optimistic !== false && Object.keys(partial).length) await meta.publish(partial);
-                        throw errors[0];
-                    }
-                    return {...result, membersState: {...result.membersState, [meta.device.ieeeAddr]: payload}};
-                },
-            }),
-            ...(converter.convertGet && {
-                convertGet: async (entity, key, meta) => {
-                    if (key === "state" && !meta.endpoint_name && isEndpoint(entity) && !Array.isArray(meta.mapped)) {
-                        for (const ID of Object.values(meta.mapped.endpoint(meta.device)))
-                            await converter.convertGet(meta.device.getEndpoint(ID), key, meta);
-                    } else return converter.convertGet(entity, key, meta);
-                },
-            }),
-        })),
-    };
-}
-
 export interface LightArgs {
+    /** Combine power across all named endpoints while preserving legacy and endpoint properties. */
+    combinedOnOff?: boolean;
     effect?: boolean;
     powerOnBehavior?: boolean;
     colorTemp?: {startup?: boolean; range: Range};
@@ -1454,6 +1340,7 @@ export function light(args: LightArgs = {}): ModernExtend {
         tz.light_brightness_step,
     ];
     const meta: DefinitionMeta = {};
+    if (args.combinedOnOff) meta.combinedOnOff = true;
 
     if (colorTemp || argsColor) {
         fromZigbee.push(fz.color_colortemp);

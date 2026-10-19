@@ -13,7 +13,7 @@ import {determineEndpoint} from "../lib/utils";
 
 const NS = "zhc:tz";
 
-export const on_off: Tz.Converter = {
+export const on_off: Tz.Converter = light.withCombinedOnOff({
     key: ["state", "on_time", "off_wait_time"],
     convertSet: async (entity, key, value, meta) => {
         const state = utils.isString(meta.message.state) ? meta.message.state.toLowerCase() : null;
@@ -46,8 +46,8 @@ export const on_off: Tz.Converter = {
     convertGet: async (entity, key, meta) => {
         await entity.read("genOnOff", ["onOff"]);
     },
-};
-export const light_color: Tz.Converter = {
+});
+export const light_color: Tz.Converter = light.withCombinedOnOff({
     key: ["color"],
     options: [exposes.options.color_sync(), exposes.options.transition()],
     convertSet: async (entity, key, value, meta) => {
@@ -162,8 +162,8 @@ export const light_color: Tz.Converter = {
     convertGet: async (entity, key, meta) => {
         await entity.read("lightingColorCtrl", light.readColorAttributes(entity, meta));
     },
-};
-export const light_colortemp: Tz.Converter = {
+});
+export const light_colortemp: Tz.Converter = light.withCombinedOnOff({
     key: ["color_temp", "color_temp_percent"],
     options: [exposes.options.color_sync(), exposes.options.transition()],
     convertSet: async (entity, key, value, meta) => {
@@ -202,7 +202,7 @@ export const light_colortemp: Tz.Converter = {
     convertGet: async (entity, key, meta) => {
         await entity.read("lightingColorCtrl", ["colorMode", "colorTemperature"]);
     },
-};
+});
 
 // #region Generic converters
 export const read: Tz.Converter = {
@@ -928,7 +928,7 @@ export const ballast_config: Tz.Converter = {
         }
     },
 };
-export const light_brightness_step: Tz.Converter = {
+export const light_brightness_step: Tz.Converter = light.withCombinedOnOff({
     key: ["brightness_step", "brightness_step_onoff"],
     options: [exposes.options.transition()],
     convertSet: async (entity, key, value, meta) => {
@@ -973,8 +973,8 @@ export const light_brightness_step: Tz.Converter = {
             return {state: {brightness, state: brightness === 0 ? "OFF" : "ON"}};
         }
     },
-};
-export const light_brightness_move: Tz.Converter = {
+});
+export const light_brightness_move: Tz.Converter = light.withCombinedOnOff({
     key: ["brightness_move", "brightness_move_onoff"],
     convertSet: async (entity, key, value, meta) => {
         const omitOptionalLevelAndColorParams = utils.getMetaValue(entity, meta.mapped, "omitOptionalLevelAndColorParams", "allEqual", false);
@@ -1000,7 +1000,7 @@ export const light_brightness_move: Tz.Converter = {
             utils.getOptions(meta.mapped, entity),
         );
     },
-};
+});
 export const light_colortemp_step: Tz.Converter = {
     key: ["color_temp_step"],
     options: [exposes.options.transition()],
@@ -1240,7 +1240,7 @@ export const light_hue_saturation_move: Tz.Converter = {
     },
 };
 
-export const light_onoff_brightness: Tz.Converter = {
+export const light_onoff_brightness: Tz.Converter = light.withCombinedOnOff({
     key: ["state", "brightness", "brightness_percent", "on_time", "off_wait_time"],
     options: [exposes.options.transition()],
     convertSet: async (entity, key, value, meta) => {
@@ -1416,7 +1416,7 @@ export const light_onoff_brightness: Tz.Converter = {
             await on_off.convertGet(entity, key, meta);
         }
     },
-};
+});
 export const light_colortemp_startup: Tz.Converter = {
     key: ["color_temp_startup"],
     convertSet: async (entity, key, value, meta) => {
@@ -1447,7 +1447,7 @@ export const light_colortemp_startup: Tz.Converter = {
         await entity.read("lightingColorCtrl", ["startUpColorTemperature"]);
     },
 };
-export const light_color_colortemp: Tz.Converter = {
+export const light_color_colortemp: Tz.Converter = light.withCombinedOnOff({
     /**
      * This converter is a combination of light_color and light_colortemp and
      * can be used instead of the two individual converters . When used to set,
@@ -1475,7 +1475,7 @@ export const light_color_colortemp: Tz.Converter = {
     convertGet: async (entity, key, meta) => {
         await entity.read("lightingColorCtrl", light.readColorAttributes(entity, meta, ["colorTemperature"]));
     },
-};
+});
 export const effect: Tz.Converter = {
     key: ["effect", "alert", "flash"], // alert and flash are deprecated.
     convertSet: async (entity, key, value, meta) => {

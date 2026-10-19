@@ -1,5 +1,5 @@
 import {describe, expect, test} from "vitest";
-import * as m from "../src/lib/modernExtend";
+import {withCombinedOnOff} from "../src/lib/light";
 import type {Definition, Tz} from "../src/lib/types";
 import {mockDevice} from "./utils";
 
@@ -8,13 +8,13 @@ describe("combined on/off converter results", () => {
         const device = mockDevice({modelID: "test_light", endpoints: [{ID: 1}, {ID: 2}]});
         const meta = {
             device,
-            mapped: {endpoint: () => ({first: 1, second: 2})} as Definition,
+            mapped: {meta: {combinedOnOff: true}, endpoint: () => ({first: 1, second: 2})} as Definition,
             state: {state_first: "OFF", state_second: "OFF"},
             message: {state: "ON"},
             options: {},
             endpoint_name: "first",
         } as Tz.Meta;
-        const wrapped = m.withCombinedOnOff({isModernExtend: true, toZigbee: [converter]}).toZigbee[0];
+        const wrapped = withCombinedOnOff(converter);
         return {device, meta, wrapped};
     };
 

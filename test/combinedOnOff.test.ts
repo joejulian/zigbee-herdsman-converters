@@ -5,7 +5,7 @@ import * as store from "../src/lib/store";
 import type {Fz, KeyValue, Tz} from "../src/lib/types";
 import {mockDevice} from "./utils";
 
-describe("withCombinedOnOff", () => {
+describe("combinedOnOff", () => {
     const endpoints = {first: 1, second: 2, third: 3};
     const extend = m.light({color: true});
     const definition = prepareDefinition({
@@ -14,7 +14,7 @@ describe("withCombinedOnOff", () => {
         vendor: "test",
         description: "test",
         endpoint: () => endpoints,
-        extend: [m.withCombinedOnOff(extend)],
+        extend: [m.light({color: true, combinedOnOff: true})],
     });
     let device: ReturnType<typeof mockDevice>;
     let meta: Tz.Meta;
@@ -41,14 +41,13 @@ describe("withCombinedOnOff", () => {
         return converter.convert(definition, msg, vi.fn(), {}, {device, state, deviceExposesChanged: vi.fn()});
     };
 
-    test("preserves exposes and leaves the wrapped extension untouched", () => {
-        const originalSet = extend.toZigbee[0].convertSet;
-        const wrapped = m.withCombinedOnOff(extend);
-        expect(wrapped.exposes).toBe(extend.exposes);
-        expect(wrapped.meta).toBe(extend.meta);
-        expect(extend.toZigbee[0].convertSet).toBe(originalSet);
-        expect(wrapped.toZigbee).not.toBe(extend.toZigbee);
-        expect(wrapped.fromZigbee).not.toBe(extend.fromZigbee);
+    test("preserves exposes and opts in without changing the default extension", () => {
+        const combined = m.light({color: true, combinedOnOff: true});
+        expect(combined.exposes).toEqual(extend.exposes);
+        expect(combined.meta).toEqual({...extend.meta, combinedOnOff: true});
+        expect(extend.meta.combinedOnOff).toBeUndefined();
+        expect(combined.toZigbee).toEqual(extend.toZigbee);
+        expect(combined.fromZigbee).toEqual(extend.fromZigbee);
     });
 
     test.each([
